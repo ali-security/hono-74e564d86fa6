@@ -1,5 +1,5 @@
 import { Hono } from '../../hono'
-import { detectors } from './language'
+import { DEFAULT_OPTIONS, detectors, normalizeLanguage } from './language'
 import { languageDetector } from '.'
 
 describe('languageDetector', () => {
@@ -107,6 +107,21 @@ describe('languageDetector', () => {
       expect(await res.text()).toBe('zh-Hant')
     })
 
+    it('should select the longest truncated match regardless of supported language order', async () => {
+      const app = createTestApp({
+        supportedLanguages: ['zh', 'zh-Hant'],
+        fallbackLanguage: 'zh',
+        order: ['header'],
+      })
+
+      const res = await app.request('/', {
+        headers: {
+          'accept-language': 'zh-Hant-CN',
+        },
+      })
+      expect(await res.text()).toBe('zh-Hant')
+    })
+
     it('should fallback when truncation does not match any supported language', async () => {
       const app = createTestApp({
         supportedLanguages: ['en', 'ja'],
@@ -181,6 +196,85 @@ describe('languageDetector', () => {
         },
       })
 
+      expect(await res.text()).toBe('en')
+    })
+  })
+
+  describe('Language Normalization', () => {
+    it('should preserve the configured value for a case-insensitive truncated match', () => {
+      expect(
+        normalizeLanguage('zh-HANT-CN', {
+          ...DEFAULT_OPTIONS,
+          supportedLanguages: ['en', 'ZH-Hant'],
+        })
+      ).toBe('ZH-Hant')
+    })
+
+    it('should handle a large unsupported language tag', () => {
+      const unsupportedLanguage = 'x-'.repeat(30_000).slice(0, -1)
+
+      expect(
+        normalizeLanguage(unsupportedLanguage, {
+          ...DEFAULT_OPTIONS,
+          supportedLanguages: ['en', 'ja'],
+        })
+      ).toBeUndefined()
+    })
+  })
+
+  describe('Large Language Tag Handling', () => {
+    const largeLanguageTag = 'x-'.repeat(60_000).slice(0, -1)
+
+    it('should fall back for a large unsupported language tag in the query parameter', async () => {
+      const app = createTestApp({
+        supportedLanguages: ['en', 'ja'],
+        fallbackLanguage: 'en',
+        order: ['querystring'],
+      })
+
+      const res = await app.request(`/?lang=${largeLanguageTag}`)
+      expect(await res.text()).toBe('en')
+    })
+
+    it('should fall back for a large unsupported language tag in the cookie', async () => {
+      const app = createTestApp({
+        supportedLanguages: ['en', 'ja'],
+        fallbackLanguage: 'en',
+        order: ['cookie'],
+      })
+
+      const res = await app.request('/', {
+        headers: {
+          cookie: `language=${largeLanguageTag}`,
+        },
+      })
+      expect(await res.text()).toBe('en')
+    })
+
+    it('should fall back for a large unsupported language tag in the Accept-Language header', async () => {
+      const app = createTestApp({
+        supportedLanguages: ['en', 'ja'],
+        fallbackLanguage: 'en',
+        order: ['header'],
+      })
+
+      const res = await app.request('/', {
+        headers: {
+          'accept-language': largeLanguageTag,
+        },
+      })
+      expect(await res.text()).toBe('en')
+    })
+
+    it('should fall back for a large unsupported language tag in the path', async () => {
+      const app = createTestApp({
+        supportedLanguages: ['en', 'ja'],
+        fallbackLanguage: 'en',
+        order: ['path'],
+        lookupFromPathIndex: 0,
+      })
+
+      const res = await app.request(`/${largeLanguageTag}/page`)
       expect(await res.text()).toBe('en')
     })
   })
