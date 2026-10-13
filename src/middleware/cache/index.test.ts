@@ -765,4 +765,80 @@ describe('Cache Skipping Logic', () => {
     expect(matchSpy).not.toHaveBeenCalled()
     expect(putSpy).not.toHaveBeenCalled()
   })
+
+  it('Should cache request URLs containing a fragment', async () => {
+    const { mockCache } = stubStoreBackedCache()
+    const app = new Hono()
+    let requestCount = 0
+    app.use('*', cache({ cacheName: 'fragment-request-test', wait: true }))
+    app.get('/', (c) => {
+      requestCount++
+      return c.text(c.req.query('name') ?? 'default')
+    })
+
+    expect(await (await app.request('http://localhost/#?name=probe')).text()).toBe('default')
+    expect(await (await app.request('http://localhost/#?name=probe')).text()).toBe('default')
+    expect(requestCount).toBe(1)
+    expect(mockCache.put).toHaveBeenCalledOnce()
+    expect(mockCache.put.mock.calls[0][0]).toBe('http://localhost/#?name=probe')
+  })
+
+  it('Should not let query-like fragments poison the cached response of the URL without them', async () => {
+    // The Cache API ignores URL fragments when matching keys, so emulate that here
+    const store = new Map<string, Response>()
+    const toStoreKey = (key: string | Request) => {
+      const url = new URL(typeof key === 'string' ? key : key.url)
+      url.hash = ''
+      return url.href
+    }
+    vi.stubGlobal('caches', {
+      open: vi.fn().mockResolvedValue({
+        match: vi.fn((key: string | Request) =>
+          Promise.resolve(store.get(toStoreKey(key))?.clone())
+        ),
+        put: vi.fn((key: string | Request, response: Response) => {
+          store.set(toStoreKey(key), response.clone())
+          return Promise.resolve()
+        }),
+        keys: vi.fn(() => Promise.resolve(Array.from(store.keys()))),
+      }),
+    })
+    const app = new Hono()
+    app.use('*', cache({ cacheName: 'fragment-poisoning-test', wait: true }))
+    app.get('/', (c) => c.text(c.req.query('name') ?? 'default'))
+
+    expect(await (await app.request('http://localhost/#?name=poisoned')).text()).toBe('default')
+    expect(await (await app.request('http://localhost/')).text()).toBe('default')
+  })
+
+  it('Should preserve fragments in custom cache keys', async () => {
+    const { mockCache } = stubStoreBackedCache()
+    const app = new Hono()
+    let requestCount = 0
+    app.use(
+      '/report',
+      cache({
+        cacheName: 'custom-fragment-key-test',
+        wait: true,
+        keyGenerator: (c) => `${c.req.path}#${c.req.header('X-Tenant-Id')}`,
+      })
+    )
+    app.get('/report', (c) => {
+      requestCount++
+      return c.text(`report for ${c.req.header('X-Tenant-Id')}`)
+    })
+
+    const request = (tenant: string) =>
+      app.request('/report', { headers: { 'X-Tenant-Id': tenant } })
+
+    expect(await (await request('acme')).text()).toBe('report for acme')
+    expect(await (await request('globex')).text()).toBe('report for globex')
+    expect(await (await request('acme')).text()).toBe('report for acme')
+    expect(requestCount).toBe(2)
+    expect(mockCache.put).toHaveBeenCalledTimes(2)
+    expect(mockCache.put.mock.calls.map(([key]) => key)).toEqual([
+      '/report#acme',
+      '/report#globex',
+    ])
+  })
 })

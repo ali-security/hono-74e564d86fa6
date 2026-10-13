@@ -36,6 +36,20 @@ describe('Query', () => {
     const tags = req.queries('tag')
     expect(tags).toEqual(['@1', '@2'])
   })
+
+  test('should ignore query-like parameters in the URL fragment', () => {
+    const req = new HonoRequest(new Request('http://localhost/?safe=1#&admin=true&tag=x'))
+    expect(req.query('safe')).toBe('1')
+    expect(req.query('admin')).toBeUndefined()
+    expect(req.query()).toEqual({ safe: '1' })
+    expect(req.queries('tag')).toBeUndefined()
+    expect(req.queries()).toEqual({ safe: ['1'] })
+
+    const fragmentOnly = new HonoRequest(new Request('http://localhost/#?admin=true'))
+    expect(fragmentOnly.query('admin')).toBeUndefined()
+    expect(fragmentOnly.query()).toEqual({})
+    expect(fragmentOnly.queries('admin')).toBeUndefined()
+  })
 })
 
 describe('Param', () => {
